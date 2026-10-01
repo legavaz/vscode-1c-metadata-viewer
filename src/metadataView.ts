@@ -60,6 +60,7 @@ export class MetadataView {
   // Фильтр нужен по каждой конфигурации отдельно
   subsystemFilter: { id: string; objects: string[] }[] = [];
   dataProvider: NodeWithIdTreeDataProvider | null = null;
+  view: vscode.TreeView<TreeItem> | null = null;
 
 	constructor(context: vscode.ExtensionContext) {
     this.rootPath = (vscode.workspace.workspaceFolders && (vscode.workspace.workspaceFolders.length > 0))
@@ -68,9 +69,10 @@ export class MetadataView {
     this.dataProvider = new NodeWithIdTreeDataProvider();
     const view = vscode.window.createTreeView('metadataView', { treeDataProvider: this.dataProvider, showCollapseAll: true });
 		context.subscriptions.push(view);
+    this.view = view;
 
     view.onDidExpandElement(e => {
-      this.expand(e.element);
+      this.loadConfiguration(e.element);
     });
 
 		vscode.workspace.workspaceFolders?.forEach(folder => {
@@ -85,7 +87,61 @@ export class MetadataView {
     vscode.commands.registerCommand('metadataViewer.openMetadataProperties', (item) => this.openMetadataProperties(context, item));
     vscode.commands.registerCommand('metadataViewer.filterBySubsystem', (item) => this.filterBySubsystem(item, true));
     vscode.commands.registerCommand('metadataViewer.clearFilter', (item) => this.filterBySubsystem(item, false));
+    vscode.commands.registerCommand('metadataViewer.searchByName', () => this.searchByName());
+    vscode.commands.registerCommand('metadataViewer.clearSearch', () => this.clearSearch());
 	}
+
+  // Поиск по коротким именам объектов дерева
+  private async searchByName(): Promise<void> {
+    const query = await vscode.window.showInputBox({
+      prompt: 'Поиск по имени объекта',
+      placeHolder: 'Введите часть имени, например: Ном',
+    });
+
+    if (query === undefined) {
+      return;
+    }
+
+    await this.search(query);
+  }
+
+  private async search(query: string): Promise<void> {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) {
+      this.clearSearch();
+      return;
+    }
+
+    // Поиск возможен только по полностью загруженному дереву конфигураций
+    await this.loadAllConfigurations();
+
+    const filtered = FilterTree(tree, trimmed.toLowerCase());
+    if (filtered.length === 0) {
+      this.dataProvider?.setSearchTree(null);
+      vscode.commands.executeCommand('setContext', 'metadataViewer.searchActive', false);
+      vscode.window.showInformationMessage(`По запросу "${trimmed}" ничего не найдено.`);
+      return;
+    }
+
+    this.dataProvider?.setSearchTree(filtered);
+    vscode.commands.executeCommand('setContext', 'metadataViewer.searchActive', true);
+    vscode.window.setStatusBarMessage(
+      `Поиск "${trimmed}": найдено ${CountTreeItems(filtered)} элементов`, 5000);
+  }
+
+  private clearSearch(): void {
+    this.dataProvider?.setSearchTree(null);
+    vscode.commands.executeCommand('setContext', 'metadataViewer.searchActive', false);
+  }
+
+  private async loadAllConfigurations(): Promise<void> {
+    const configurations = tree[0].children ?? [];
+    for (const configuration of configurations) {
+      if (!configuration.isLoaded) {
+        await this.loadConfiguration(configuration);
+      }
+    }
+  }
 
   // Открытие макета
   private openTemplate(context: vscode.ExtensionContext, template: string, configType: string): void {
@@ -317,7 +373,7 @@ export class MetadataView {
           this.subsystemFilter.push({ id: config.id, objects: item.command?.arguments ?? [] });
         }
         // Заполняю дерево конфигурации с фильтром
-        this.expand(tree[0].children[configIndex]);
+        this.loadConfiguration(tree[0].children[configIndex]);
 
         vscode.commands.executeCommand('setContext', 'filteredConfigArray',
           this.subsystemFilter.filter((sf) => sf.objects.length !== 0).map((sf) => `subsystem_${sf.id}`));
@@ -325,14 +381,14 @@ export class MetadataView {
     }
   }
 
-  private expand(element: TreeItem) {
-    if (!element.isConfiguration) {
+  private async loadConfiguration(element: TreeItem): Promise<void> {
+    if (!element.isConfiguration || element.isLoaded || !this.rootPath) {
       return;
     }
 
     if (this.rootPath) {
       if (element.configType === 'xml') {
-        vscode.workspace.fs.readFile(this.rootPath.with({ path: posix.join(element.id, 'ConfigDumpInfo.xml') }))
+        await vscode.workspace.fs.readFile(this.rootPath.with({ path: posix.join(element.id, 'ConfigDumpInfo.xml') }))
           .then(configXml => {
             const arrayPaths = [
               'ConfigDumpInfo.ConfigVersions.Metadata.Metadata',
@@ -389,12 +445,13 @@ export class MetadataView {
               removeSubSystems(element.children![0].children![0], currentFilter);
             }
 
+            element.isLoaded = true;
             this.dataProvider?.update();
           });
       } else {
         const edt = new Edt(this.rootPath.with({ path: posix.join(
           element.id, 'Configuration', 'Configuration.mdo') }), this.dataProvider!);
-        edt.createTreeElements(element, this.subsystemFilter.find((sf) => sf.id === element.id)?.objects ?? []);
+        await edt.createTreeElements(element, this.subsystemFilter.find((sf) => sf.id === element.id)?.objects ?? []);
       }
     }
   }
@@ -1063,9 +1120,13 @@ export class NodeWithIdTreeDataProvider implements vscode.TreeDataProvider<TreeI
 	private _onDidChangeTreeData: vscode.EventEmitter<any> = new vscode.EventEmitter<any>();
 	readonly onDidChangeTreeData: vscode.Event<any> = this._onDidChangeTreeData.event;
 
+  // Отфильтрованное дерево для режима поиска. null — режим поиска выключен.
+  searchTree: TreeItem[] | null = null;
+
   getChildren(element?: TreeItem | undefined): vscode.ProviderResult<TreeItem[]> {
+    const root = this.searchTree ?? tree;
     if (element === undefined) {
-      return tree;
+      return root;
     }
     return element.children;
   }
@@ -1075,13 +1136,86 @@ export class NodeWithIdTreeDataProvider implements vscode.TreeDataProvider<TreeI
   }
 
   getParent(element: TreeItem): TreeItem | undefined {
-    return SearchTree(tree[0], element.parentId) ?? undefined;
+    const root = this.searchTree ?? tree;
+    return SearchTree(root[0], element.parentId) ?? undefined;
+  }
+
+  setSearchTree(newTree: TreeItem[] | null) {
+    this.searchTree = newTree;
+    this.update();
   }
 
   update() {
     if (!tree) return;
     this._onDidChangeTreeData.fire(undefined);
   }
+}
+
+// Копия элемента дерева с сохранением идентификатора, пути, команды и иконки.
+// Дети всегда пересоздаются отдельно, чтобы фильтрация не меняла исходное дерево.
+function CloneTreeItem(item: TreeItem): TreeItem {
+  const clone = new TreeItem(item.id, String(item.label), undefined);
+  clone.path = item.path;
+  clone.parentId = item.parentId;
+  clone.isConfiguration = item.isConfiguration;
+  clone.isLoaded = item.isLoaded;
+  clone.configType = item.configType;
+  clone.iconPath = item.iconPath;
+  clone.contextValue = item.contextValue;
+  clone.command = item.command;
+  clone.tooltip = item.tooltip;
+  clone.description = item.description;
+  return clone;
+}
+
+function CountTreeItems(items: TreeItem[]): number {
+  let total = items.length;
+  for (const item of items) {
+    if (item.children) {
+      total += CountTreeItems(item.children);
+    }
+  }
+  return total;
+}
+
+// Фильтрация дерева по короткому имени (label): подстрока без учёта регистра.
+// Элемент остаётся, если совпал сам или если у него есть потомки-совпадения.
+function FilterTree(items: TreeItem[] | undefined, query: string): TreeItem[] {
+  if (!items) {
+    return [];
+  }
+
+  const result: TreeItem[] = [];
+  for (const item of items) {
+    const matched = String(item.label).toLowerCase().includes(query);
+    const filteredChildren = FilterTree(item.children, query);
+
+    if (!matched && filteredChildren.length === 0) {
+      continue;
+    }
+
+    const clone = CloneTreeItem(item);
+    clone.children = filteredChildren.length === 0 ? undefined : filteredChildren;
+    clone.collapsibleState = clone.children === undefined
+      ? vscode.TreeItemCollapsibleState.None
+      : vscode.TreeItemCollapsibleState.Expanded;
+
+    if (matched) {
+      clone.label = GetHighlightedLabel(String(item.label), query);
+    }
+
+    result.push(clone);
+  }
+
+  return result;
+}
+
+function GetHighlightedLabel(label: string, query: string): vscode.TreeItemLabel {
+  const start = label.toLowerCase().indexOf(query);
+  if (start === -1) {
+    return { label };
+  }
+  return { label, highlights: [[start, start + query.length]] };
 }
 
 function CreateMetadata(idPrefix: string) {

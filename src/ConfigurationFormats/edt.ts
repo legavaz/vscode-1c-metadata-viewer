@@ -21,8 +21,8 @@ export class Edt {
 		this.dataProvider = dataProvider;
 	}
 
-	createTreeElements(root: TreeItem, subsystemFilter: string[]) {
-		window.withProgress({
+	createTreeElements(root: TreeItem, subsystemFilter: string[]): Thenable<void> {
+		return window.withProgress({
 			location: ProgressLocation.Notification,
 			title: "Происходит загрузка конфигурации",
 			cancellable: true
@@ -120,7 +120,9 @@ export class Edt {
 				this.removeSubSystems(root.children![0].children![0], subsystemFilter);
 				this.dataProvider.update();
 			}
-		}, ); // WithProgress
+
+			root.isLoaded = true;
+		}); // WithProgress
 	}
 
 	removeSubSystems(subsystemsTreeItem: TreeItem, subsystemFilter: string[]) {

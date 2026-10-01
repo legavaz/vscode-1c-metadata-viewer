@@ -16,5 +16,7 @@
 	"1c-metadata-viewer.openHandler.title": "Открыть обработчик",
 	"1c-metadata-viewer.openMetadataProperties.title": "Свойства",
 	"1c-metadata-viewer.filterBySubsystem.title": "Фильтровать по подсистеме",
-	"1c-metadata-viewer.clearFilter.title": "Очистить фильтр по подсистеме"
+	"1c-metadata-viewer.clearFilter.title": "Очистить фильтр по подсистеме",
+	"1c-metadata-viewer.searchByName.title": "Поиск по имени",
+	"1c-metadata-viewer.clearSearch.title": "Очистить поиск"
 }

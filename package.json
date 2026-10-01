@@ -109,9 +109,36 @@
 			{
 				"command": "metadataViewer.clearFilter",
 				"title": "%1c-metadata-viewer.clearFilter.title%"
+			},
+			{
+				"command": "metadataViewer.searchByName",
+				"title": "%1c-metadata-viewer.searchByName.title%",
+				"icon": {
+					"dark": "resources/dark/search.svg",
+					"light": "resources/light/search.svg"
+				}
+			},
+			{
+				"command": "metadataViewer.clearSearch",
+				"title": "%1c-metadata-viewer.clearSearch.title%",
+				"icon": {
+					"dark": "resources/dark/clear.svg",
+					"light": "resources/light/clear.svg"
+				}
 			}
 		],
 		"menus": {
+			"view/title": [
+				{
+					"command": "metadataViewer.searchByName",
+					"group": "navigation@1"
+				},
+				{
+					"command": "metadataViewer.clearSearch",
+					"group": "navigation@2",
+					"when": "metadataViewer.searchActive"
+				}
+			],
 			"view/item/context": [
 				{
 					"command": "metadataViewer.openAppModule",

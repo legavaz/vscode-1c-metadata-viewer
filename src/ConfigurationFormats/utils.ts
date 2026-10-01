@@ -66,6 +66,7 @@ export class TreeItem extends vscode.TreeItem {
   path?: string;
   parentId = "";
   isConfiguration = false;
+  isLoaded = false;
   configType: "edt" | "xml" = "xml";
 
   constructor(id: string, label: string, children?: TreeItem[]) {
